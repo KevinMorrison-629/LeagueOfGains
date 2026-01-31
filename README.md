@@ -8,6 +8,10 @@ League of Gains is a Discord bot that turns your League of Legends deaths into p
 
 ---
 
+## Getting Started
+
+For detailed instructions on how to install, configure, and build the bot from source, please refer to [INSTALL.md](INSTALL.md).
+
 ## Features
 
 * **Automatic Tracking**: Polls the Riot API to detect new matches.
