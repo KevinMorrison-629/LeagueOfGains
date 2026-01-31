@@ -1,0 +1,10 @@
+{
+    "name": "hakari",
+    "version-string": "0.0.1",
+    "dependencies": [
+        "sqlite3",
+        "dpp",
+        "openssl",
+        "nlohmann-json"
+    ]
+}
