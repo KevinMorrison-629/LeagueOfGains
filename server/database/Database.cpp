@@ -629,4 +629,87 @@ namespace Server::DB
 
         return stats;
     }
+
+    // =========================== UI/UX IMPROVEMENTS ===========================
+
+    std::vector<PenanceDisplayInfo> Database::GetRecentGames(int64_t user_id, int limit)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        std::vector<PenanceDisplayInfo> items;
+        sqlite3_stmt *stmt;
+        const char *sql = "SELECT match_id, user_id, timestamp, champion_name, kills, deaths, assists, kp_percent, cs_total, "
+                          "cs_min FROM games WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?";
+
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0) != SQLITE_OK)
+            return items;
+
+        sqlite3_bind_int64(stmt, 1, user_id);
+        sqlite3_bind_int(stmt, 2, limit);
+
+        while (sqlite3_step(stmt) == SQLITE_ROW)
+        {
+            PenanceDisplayInfo item;
+            // Fill basics although this struct is slightly misused here (it was meant for Penance)
+            // We just need the stats part for the Charts
+            item.match_id = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+            // user_id at 1
+            item.game_timestamp = sqlite3_column_int64(stmt, 2);
+            item.champion_name = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3));
+            item.kills = sqlite3_column_int(stmt, 4);
+            item.deaths = sqlite3_column_int(stmt, 5);
+            item.assists = sqlite3_column_int(stmt, 6);
+            item.kp_percent = sqlite3_column_double(stmt, 7);
+            item.cs = sqlite3_column_int(stmt, 8);
+            item.cs_min = sqlite3_column_double(stmt, 9);
+            
+            items.push_back(item);
+        }
+        sqlite3_finalize(stmt);
+        return items;
+    }
+
+    std::vector<std::pair<std::string, int>> Database::GetLeaderboard(const std::string &type)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        std::vector<std::pair<std::string, int>> results;
+        sqlite3_stmt *stmt;
+        std::string sql;
+
+        // Note: Joining with users table to get names
+        if (type == "reps")
+        {
+            sql = "SELECT u.riot_name, SUM(h.reps) as val FROM exercise_history h "
+                  "JOIN users u ON h.user_id = u.discord_id "
+                  "GROUP BY h.user_id ORDER BY val DESC LIMIT 10";
+        }
+        else if (type == "deaths")
+        {
+             sql = "SELECT u.riot_name, SUM(g.deaths) as val FROM games g "
+                  "JOIN users u ON g.user_id = u.discord_id "
+                  "GROUP BY g.user_id ORDER BY val DESC LIMIT 10";
+        }
+        else if (type == "kda")
+        {
+             // For KDA we might want a minimum game count to avoid 1-game wonders
+             // Using integer scaled by 100 for "score" since pair is <string, int>
+             sql = "SELECT u.riot_name, (CAST((SUM(g.kills) + SUM(g.assists)) AS REAL) / MAX(SUM(g.deaths), 1)) * 100 as val "
+                   "FROM games g "
+                   "JOIN users u ON g.user_id = u.discord_id "
+                   "GROUP BY g.user_id HAVING COUNT(*) > 5 ORDER BY val DESC LIMIT 10";
+        }
+
+        if (sql.empty()) return results;
+
+        if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK)
+            return results;
+
+        while (sqlite3_step(stmt) == SQLITE_ROW)
+        {
+            const char* name = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+            int val = sqlite3_column_int(stmt, 1);
+            results.push_back({name ? name : "Unknown", val});
+        }
+        sqlite3_finalize(stmt);
+        return results;
+    }
 } // namespace Server::DB

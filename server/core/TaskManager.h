@@ -18,6 +18,7 @@ namespace Core::Utils
         GENERIC,
         SLASH_COMMAND,
         BUTTON_CLICK, // New
+        SELECT_CLICK, // Newer
         TRACKER_UPDATE,
         CHECK_USER_MATCH
     };
@@ -52,6 +53,16 @@ namespace Core::Utils
     {
     public:
         dpp::button_click_t event;
+        std::shared_ptr<AppContext> ctx;
+
+        void process() override;
+    };
+
+    // 2.5 Select Menu Click Task
+    class TaskSelectClick : public Task
+    {
+    public:
+        dpp::select_click_t event;
         std::shared_ptr<AppContext> ctx;
 
         void process() override;

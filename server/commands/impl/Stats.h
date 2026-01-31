@@ -46,6 +46,42 @@ namespace Core::Commands::Impl
                 exercises = "None";
             embed.add_field("💪 Reps Completed", exercises, false);
 
+            // Chart Logic
+            auto recentGames = ctx->db->GetRecentGames(user.id, 10);
+            if (!recentGames.empty())
+            {
+                std::stringstream labels_ss;
+                std::stringstream data_ss;
+                labels_ss << "[";
+                data_ss << "[";
+                
+                // Oldest first for the graph
+                for (int i = recentGames.size() - 1; i >= 0; --i)
+                {
+                    labels_ss << "'" << i + 1 << "'"; // Just using indices 1..10
+                    data_ss << recentGames[i].deaths;
+                    if (i > 0) {
+                        labels_ss << ",";
+                        data_ss << ",";
+                    }
+                }
+                labels_ss << "]";
+                data_ss << "]";
+
+                // Construct URL manually
+                // Warning: QuickChart URLs can get long, we need to keep it simple.
+                // Using a darker background theme for Discord.
+                std::string chartUrl = "https://quickchart.io/chart?c={type:'line',data:{labels:" + labels_ss.str() + 
+                                       ",datasets:[{label:'Deaths',data:" + data_ss.str() + 
+                                       ",borderColor:'red',fill:false}]},options:{legend:{labels:{fontColor:'white'}},scales:{yAxes:[{ticks:{fontColor:'white',beginAtZero:true}}],xAxes:[{ticks:{fontColor:'white'}}]}}}";
+                
+                // URL Encode is ideally needed but specific chars like {} are usually handled by browsers, 
+                // but Discord might be picky. QuickChart works well usually.
+                // Replaced space with %20 just in case, though we have none.
+                
+                embed.set_image(chartUrl);
+            }
+
             event.edit_original_response(dpp::message(embed));
         }
     };

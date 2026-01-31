@@ -56,7 +56,6 @@ namespace Core::Commands::Impl
             dpp::message msg;
 
             // 1. Header Embed
-            // We use a "Header" embed to carry the main title and page info
             dpp::embed header = dpp::embed()
                                     .set_title("🏋️ Penance List")
                                     .set_color(0xFFA500) // Orange
@@ -68,33 +67,41 @@ namespace Core::Commands::Impl
             if (allTasks.empty())
             {
                 header.set_description("🎉 You are free! No pending exercises.");
-                // We just send the header if empty
                 return msg;
             }
 
             int startIdx = page * ITEMS_PER_PAGE;
             int endIdx = std::min(startIdx + ITEMS_PER_PAGE, (int)allTasks.size());
 
+            // Select Menus
+            dpp::component selectMenuComplete;
+            selectMenuComplete.set_type(dpp::cot_selectmenu);
+            selectMenuComplete.set_placeholder("Select Task to Complete...");
+            selectMenuComplete.set_id("penance_completion_menu");
+
+            dpp::component selectMenuReroll;
+            selectMenuReroll.set_type(dpp::cot_selectmenu);
+            selectMenuReroll.set_placeholder("Select Task to Reroll...");
+            selectMenuReroll.set_id("penance_reroll_menu");
+
+            bool hasItems = false;
+
             // 2. Item Embeds (One per game)
             for (int i = startIdx; i < endIdx; ++i)
             {
+                hasItems = true;
                 const auto &task = allTasks[i];
                 dpp::embed itemEmbed = dpp::embed();
 
-                // Color Code: Use a slightly darker orange/red for the tasks
                 itemEmbed.set_color(0xFF4500);
-
-                // Thumbnail: Specific Champion Image
                 std::string champUrl = "https://ddragon.leagueoflegends.com/cdn/14.1.1/img/champion/" +
                                        CleanChampName(task.champion_name) + ".png";
                 itemEmbed.set_thumbnail(champUrl);
 
-                // Title: The Exercise Requirement
                 std::stringstream title;
                 title << task.reps << " " << task.exercise_name << " (Deaths: " << task.original_deaths << ")";
                 itemEmbed.set_title(title.str());
 
-                // Description: Game Stats
                 std::stringstream desc;
                 desc << "**" << task.champion_name << "**"
                      << "\n💀 **KDA:** " << task.kills << "/" << task.deaths << "/" << task.assists << "\n📊 **KP:** "
@@ -104,30 +111,44 @@ namespace Core::Commands::Impl
                      << "\n🆔 `" << task.match_id << "`";
 
                 itemEmbed.set_description(desc.str());
-
                 msg.add_embed(itemEmbed);
+
+                // Add to Select Menus
+                std::string labelComplete = "✅ " + std::to_string(task.reps) + " " + task.exercise_name + " (" + task.champion_name + ")";
+                selectMenuComplete.add_select_option(dpp::select_option(labelComplete, "complete_" + task.match_id, "Mark as Done"));
+
+                std::string labelReroll = "🎲 " + task.champion_name + " (" + task.exercise_name + ")";
+                selectMenuReroll.add_select_option(dpp::select_option(labelReroll, "reroll_" + task.match_id, "Reroll Exercise"));
             }
 
-            // 3. Buttons
-            dpp::component row;
+            // 3. Components
+            if (hasItems)
+            {
+                 dpp::component actionRow1;
+                 actionRow1.add_component(selectMenuComplete);
+                 msg.add_component(actionRow1);
 
-            // Prev Button
-            row.add_component(dpp::component()
+                 dpp::component actionRow2;
+                 actionRow2.add_component(selectMenuReroll);
+                 msg.add_component(actionRow2);
+            }
+
+            dpp::component buttonRow;
+            buttonRow.add_component(dpp::component()
                                   .set_type(dpp::cot_button)
                                   .set_label("Previous")
                                   .set_style(dpp::cos_secondary)
                                   .set_id("penance_prev_" + std::to_string(page))
                                   .set_disabled(page == 0));
 
-            // Next Button
-            row.add_component(dpp::component()
+            buttonRow.add_component(dpp::component()
                                   .set_type(dpp::cot_button)
                                   .set_label("Next")
                                   .set_style(dpp::cos_secondary)
                                   .set_id("penance_next_" + std::to_string(page))
                                   .set_disabled(page >= totalPages - 1));
 
-            msg.add_component(row);
+            msg.add_component(buttonRow);
             return msg;
         }
 
@@ -178,6 +199,57 @@ namespace Core::Commands::Impl
             dpp::message msg = BuildMessage(tasks, newPage);
 
             // Interaction update (replaces the message that spawned the button click)
+            event.reply(dpp::ir_update_message, msg);
+        }
+
+        void OnSelect(const dpp::select_click_t &event, std::shared_ptr<Core::Utils::AppContext> ctx) override
+        {
+            // Always acknowledge interaction
+            if (event.values.empty()) 
+            {
+               event.reply(dpp::ir_update_message, dpp::message("❌ Invalid selection")); 
+               return;
+            }
+
+            std::string value = event.values[0]; 
+            std::string gameId = value.substr(value.find('_') + 1);
+            auto user = event.command.get_issuing_user();
+
+            bool actionTaken = false;
+
+            if (value.find("complete_") == 0)
+            {
+                auto task = ctx->db->GetPenanceByGameID(user.id, gameId);
+                if (task)
+                {
+                    ctx->db->CompletePenance(user.id, gameId);
+                    actionTaken = true;
+                }
+            }
+            else if (value.find("reroll_") == 0)
+            {
+                auto task = ctx->db->GetPenanceByGameID(user.id, gameId);
+                if (task)
+                {
+                    auto newExOpt = ctx->db->GetRandomExercise();
+                    if (newExOpt)
+                    {
+                        auto newEx = *newExOpt;
+                        double multiplier = ctx->db->GetUserMultiplier(user.id, newEx.type);
+                        int totalReps = static_cast<int>(task->original_deaths * newEx.set_count * multiplier);
+                        ctx->db->UpdatePenance(task->id, newEx.name, totalReps);
+                        actionTaken = true;
+                    }
+                }
+            }
+
+            // Regardless of whether we found the task or not (maybe it was already done),
+            // we REFRESH the list.
+            auto tasks = ctx->db->GetPendingPenanceDetailed(user.id);
+            dpp::message msg = BuildMessage(tasks, 0); 
+            
+            // If we successfully did something, we update. 
+            // If the task was missing, we still update (it disappears from list).
             event.reply(dpp::ir_update_message, msg);
         }
     };

@@ -8,6 +8,7 @@
 #include "server/commands/impl/Penance.h"
 #include "server/commands/impl/Reroll.h"
 #include "server/commands/impl/Stats.h"
+#include "server/commands/impl/Leaderboard.h"
 #include "server/commands/impl/Wimp.h"
 
 namespace Core::Discord
@@ -28,6 +29,7 @@ namespace Core::Discord
         reg.Register(std::make_shared<Core::Commands::Impl::CmdStats>());
         reg.Register(std::make_shared<Core::Commands::Impl::CmdForceFetch>());
         reg.Register(std::make_shared<Core::Commands::Impl::CmdWimp>());
+        reg.Register(std::make_shared<Core::Commands::Impl::CmdLeaderboard>());
 
         m_bot->on_log(dpp::utility::cout_logger());
         m_bot->on_ready([this](const dpp::ready_t &event) { this->OnReady(event); });
@@ -35,6 +37,9 @@ namespace Core::Discord
 
         // Register Button Click Handler
         m_bot->on_button_click([this](const dpp::button_click_t &event) { this->OnButtonClick(event); });
+
+        // Register Select Click Handler
+        m_bot->on_select_click([this](const dpp::select_click_t &event) { this->OnSelectClick(event); });
     }
 
     void Bot::Run() { m_bot->start(dpp::st_wait); }
@@ -104,6 +109,17 @@ namespace Core::Discord
         auto task = std::make_unique<Utils::TaskButtonClick>();
         task->type = Utils::TaskType::BUTTON_CLICK;
         task->priority = Utils::TaskPriority::High; // UI interactions should be snappy
+        task->event = event;
+        task->ctx = m_ctx;
+
+        m_taskManager->submit(std::move(task));
+    }
+
+    void Bot::OnSelectClick(const dpp::select_click_t &event)
+    {
+        auto task = std::make_unique<Utils::TaskSelectClick>();
+        task->type = Utils::TaskType::SELECT_CLICK;
+        task->priority = Utils::TaskPriority::High;
         task->event = event;
         task->ctx = m_ctx;
 

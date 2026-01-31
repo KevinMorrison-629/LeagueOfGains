@@ -18,7 +18,8 @@ namespace Core::Discord
 
         void OnReady(const dpp::ready_t &event);
         void OnSlashCommand(const dpp::interaction_create_t &event);
-        void OnButtonClick(const dpp::button_click_t &event); // New Handler
+        void OnButtonClick(const dpp::button_click_t &event); 
+        void OnSelectClick(const dpp::select_click_t &event); 
         void RegisterCommands();
     };
 } // namespace Core::Discord

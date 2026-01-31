@@ -27,8 +27,11 @@ namespace Core::Commands
         // The logic to run when the command is triggered
         virtual void Execute(const dpp::interaction_create_t &event, std::shared_ptr<Core::Utils::AppContext> ctx) = 0;
 
-        // Optional: Handle button clicks related to this command
+        // Handle button clicks related to this command
         virtual void OnButton(const dpp::button_click_t &event, std::shared_ptr<Core::Utils::AppContext> ctx) {}
+
+        // Handle select menu interactions
+        virtual void OnSelect(const dpp::select_click_t &event, std::shared_ptr<Core::Utils::AppContext> ctx) {}
     };
 
     // Registry to manage commands

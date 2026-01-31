@@ -78,12 +78,13 @@ namespace Core::Utils
     {
         std::string customId = event.custom_id;
 
-        // Simple routing: if customId starts with "penance_", route to Penance command
+        // Simple routing
         std::string cmdName = "";
         if (customId.find("penance_") == 0)
             cmdName = "penance";
-        // Add other mappings here as needed
-
+        else if (customId.find("reroll_") == 0)
+             cmdName = "reroll";
+        
         if (!cmdName.empty())
         {
             auto cmd = Core::Commands::CommandRegistry::Instance().Get(cmdName);
@@ -96,6 +97,36 @@ namespace Core::Utils
                 catch (const std::exception &e)
                 {
                     std::cerr << "Button Error: " << e.what() << std::endl;
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // SELECT MENU PROCESSING
+    // -------------------------------------------------------------------------
+    void TaskSelectClick::process()
+    {
+        std::string customId = event.custom_id;
+
+        std::string cmdName = "";
+        
+        // Map any penance related menu to the penance command
+        if (customId.find("penance_") == 0)
+            cmdName = "penance";
+        
+        if (!cmdName.empty())
+        {
+             auto cmd = Core::Commands::CommandRegistry::Instance().Get(cmdName);
+            if (cmd)
+            {
+                try
+                {
+                    cmd->OnSelect(event, ctx);
+                }
+                catch (const std::exception &e)
+                {
+                    std::cerr << "Select Error: " << e.what() << std::endl;
                 }
             }
         }

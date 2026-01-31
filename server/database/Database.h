@@ -101,8 +101,10 @@ namespace Server::DB
         void AddToQueue(int64_t user_id, const std::string &match_id, const std::string &exercise, int reps, int deaths);
         std::vector<ExerciseQueueItem> GetPendingPenance(int64_t user_id);
 
-        // New Method for Rich Display
+        // Rich Displays
         std::vector<PenanceDisplayInfo> GetPendingPenanceDetailed(int64_t user_id);
+        std::vector<PenanceDisplayInfo> GetRecentGames(int64_t user_id, int limit);
+        std::vector<std::pair<std::string, int>> GetLeaderboard(const std::string& type);
 
         std::optional<ExerciseQueueItem> GetPenanceByGameID(int64_t user_id, const std::string &match_id);
 
