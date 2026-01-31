@@ -79,14 +79,3 @@ The bot requires a JSON configuration file to run.
   ]
 }
 ```
-
-## Logic Flow
-1. Initialization: On startup, the bot loads exercises from the config into the database.
-2. Monitoring: Every 5 minutes, the bot checks the match history for every linked user.
-3. Detection: If a new match ID is found:
-    * It analyzes the match stats.
-    * If deaths > 0, it selects a random exercise.
-    * Calculation: Reps = Deaths * Base_Rep_Count * User_Multiplier.
-    * The task is added to the user's /penance queue.
-    * The user receives a DM with the details.
-4. Completion: The user performs the exercise and runs /complete <gameid> to clear it.
