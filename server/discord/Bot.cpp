@@ -2,11 +2,9 @@
 #include "server/commands/CommandSystem.h"
 
 // Include Command Implementations
-#include "server/commands/impl/Complete.h"
 #include "server/commands/impl/ForceFetch.h"
 #include "server/commands/impl/Link.h"
 #include "server/commands/impl/Penance.h"
-#include "server/commands/impl/Reroll.h"
 #include "server/commands/impl/Stats.h"
 #include "server/commands/impl/Leaderboard.h"
 #include "server/commands/impl/Wimp.h"
@@ -24,8 +22,6 @@ namespace Core::Discord
         auto &reg = Core::Commands::CommandRegistry::Instance();
         reg.Register(std::make_shared<Core::Commands::Impl::CmdLink>());
         reg.Register(std::make_shared<Core::Commands::Impl::CmdPenance>());
-        reg.Register(std::make_shared<Core::Commands::Impl::CmdComplete>());
-        reg.Register(std::make_shared<Core::Commands::Impl::CmdReroll>());
         reg.Register(std::make_shared<Core::Commands::Impl::CmdStats>());
         reg.Register(std::make_shared<Core::Commands::Impl::CmdForceFetch>());
         reg.Register(std::make_shared<Core::Commands::Impl::CmdWimp>());

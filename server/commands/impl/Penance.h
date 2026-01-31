@@ -107,8 +107,7 @@ namespace Core::Commands::Impl
                      << "\n💀 **KDA:** " << task.kills << "/" << task.deaths << "/" << task.assists << "\n📊 **KP:** "
                      << std::fixed << std::setprecision(0) << task.kp_percent << "%"
                      << " • **CS:** " << task.cs << " (" << std::fixed << std::setprecision(1) << task.cs_min << "/m)"
-                     << "\n⏱️ " << FormatDuration(task.cs, task.cs_min) << " • <t:" << (task.game_timestamp / 1000) << ":R>"
-                     << "\n🆔 `" << task.match_id << "`";
+                     << "\n⏱️ " << FormatDuration(task.cs, task.cs_min) << " • <t:" << (task.game_timestamp / 1000) << ":R>";
 
                 itemEmbed.set_description(desc.str());
                 msg.add_embed(itemEmbed);
