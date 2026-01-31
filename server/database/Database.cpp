@@ -67,6 +67,7 @@ namespace Server::DB
                 kp_percent REAL,
                 cs_total INTEGER,
                 cs_min REAL,
+                game_duration INTEGER DEFAULT 0,
                 PRIMARY KEY (match_id, user_id)
             );
             CREATE TABLE IF NOT EXISTS exercise_queue (
@@ -95,6 +96,8 @@ namespace Server::DB
         sqlite3_exec(m_db, "ALTER TABLE users ADD COLUMN wimp_mult_lower REAL DEFAULT 1.0", 0, 0, &errMsg);
         sqlite3_free(errMsg);
         sqlite3_exec(m_db, "ALTER TABLE users ADD COLUMN wimp_mult_core REAL DEFAULT 1.0", 0, 0, &errMsg);
+        sqlite3_free(errMsg);
+        sqlite3_exec(m_db, "ALTER TABLE games ADD COLUMN game_duration INTEGER DEFAULT 0", 0, 0, &errMsg);
         sqlite3_free(errMsg);
     }
 
@@ -519,13 +522,13 @@ namespace Server::DB
         return exists;
     }
 
-    void Database::LogGame(int64_t user_id, const std::string &match_id, int64_t timestamp, const std::string &champ, int k,
+    void Database::LogGame(int64_t user_id, const std::string &match_id, int64_t timestamp, int64_t gameDuration, const std::string &champ, int k,
                            int d, int a, double kp, int cs, double cs_min)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         sqlite3_stmt *stmt;
         const char *sql = "INSERT OR IGNORE INTO games (match_id, user_id, timestamp, champion_name, kills, deaths, "
-                          "assists, kp_percent, cs_total, cs_min) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                          "assists, kp_percent, cs_total, cs_min, game_duration) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0) == SQLITE_OK)
         {
@@ -539,6 +542,7 @@ namespace Server::DB
             sqlite3_bind_double(stmt, 8, kp);
             sqlite3_bind_int(stmt, 9, cs);
             sqlite3_bind_double(stmt, 10, cs_min);
+            sqlite3_bind_int64(stmt, 11, gameDuration);
             sqlite3_step(stmt);
             sqlite3_finalize(stmt);
         }
@@ -550,7 +554,7 @@ namespace Server::DB
         UserStats stats = {0, 0, 0.0, 0, 0.0, {}, {}, 0};
         sqlite3_stmt *stmt;
 
-        if (sqlite3_prepare_v2(m_db, "SELECT SUM(deaths), COUNT(*), MAX(deaths), AVG(deaths) FROM games WHERE user_id = ?",
+        if (sqlite3_prepare_v2(m_db, "SELECT SUM(deaths), COUNT(*), MAX(deaths), SUM(game_duration) FROM games WHERE user_id = ?",
                                -1, &stmt, 0) == SQLITE_OK)
         {
             sqlite3_bind_int64(stmt, 1, user_id);
@@ -559,7 +563,18 @@ namespace Server::DB
                 stats.total_deaths = sqlite3_column_int(stmt, 0);
                 stats.total_games = sqlite3_column_int(stmt, 1);
                 stats.most_deaths_single = sqlite3_column_int(stmt, 2);
-                stats.avg_deaths_min = sqlite3_column_double(stmt, 3) / 30.0;
+                
+                double totalSeconds = sqlite3_column_double(stmt, 3);
+                if (totalSeconds > 0)
+                {
+                    double totalMinutes = totalSeconds / 60.0;
+                    stats.avg_deaths_min = (double)stats.total_deaths / totalMinutes;
+                }
+                else
+                {
+                    // Fallback for division by zero or empty data
+                     stats.avg_deaths_min = 0.0;
+                }
             }
             sqlite3_finalize(stmt);
         }

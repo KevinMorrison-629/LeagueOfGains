@@ -19,6 +19,7 @@ namespace Server::Riot
         int cs;
         double cs_min;
         int64_t timestamp;
+        int64_t gameDuration;
         bool win;
     };
 

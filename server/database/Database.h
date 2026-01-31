@@ -112,7 +112,7 @@ namespace Server::DB
         // Stats & Logic
         bool IsMatchProcessed(int64_t discord_id, const std::string &match_id);
 
-        void LogGame(int64_t user_id, const std::string &match_id, int64_t timestamp, const std::string &champ, int k, int d,
+        void LogGame(int64_t user_id, const std::string &match_id, int64_t timestamp, int64_t gameDuration, const std::string &champ, int k, int d,
                      int a, double kp, int cs, double cs_min);
         UserStats GetUserStats(int64_t user_id);
 

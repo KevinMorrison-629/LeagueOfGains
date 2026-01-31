@@ -144,7 +144,7 @@ namespace Core::Utils
 
             if (stats.valid)
             {
-                ctx->db->LogGame(user.discord_id, match_id, stats.timestamp, stats.champion_name, stats.kills, stats.deaths,
+                ctx->db->LogGame(user.discord_id, match_id, stats.timestamp, stats.gameDuration, stats.champion_name, stats.kills, stats.deaths,
                                  stats.assists, stats.kp_percent, stats.cs, stats.cs_min);
 
                 if (stats.deaths > 0)

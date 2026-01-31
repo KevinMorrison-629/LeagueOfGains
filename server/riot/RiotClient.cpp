@@ -174,6 +174,7 @@ namespace Server::Riot
                 stats.assists = userP.value("assists", 0);
                 stats.win = userP.value("win", false);
                 stats.timestamp = info.value("gameCreation", 0LL);
+                stats.gameDuration = gameDuration;
 
                 int involvement = stats.kills + stats.assists;
                 stats.kp_percent = (teamKills > 0) ? ((double)involvement / teamKills * 100.0) : 0.0;
