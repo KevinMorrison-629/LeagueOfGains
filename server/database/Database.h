@@ -121,6 +121,118 @@ namespace Server::DB
     private:
         sqlite3 *m_db;
         std::mutex m_mutex;
+        
+        // Base Execute for raw SQL (migrations etc)
         void ExecuteSQL(const std::string &sql);
+
+        // Binding Helpers
+        void BindParameter(sqlite3_stmt *stmt, int index, int value)
+        {
+            sqlite3_bind_int(stmt, index, value);
+        }
+        void BindParameter(sqlite3_stmt *stmt, int index, int64_t value)
+        {
+            sqlite3_bind_int64(stmt, index, value);
+        }
+        void BindParameter(sqlite3_stmt *stmt, int index, double value)
+        {
+            sqlite3_bind_double(stmt, index, value);
+        }
+        void BindParameter(sqlite3_stmt *stmt, int index, const std::string &value)
+        {
+            sqlite3_bind_text(stmt, index, value.c_str(), -1, SQLITE_TRANSIENT);
+        }
+        void BindParameter(sqlite3_stmt *stmt, int index, const char *value)
+        {
+             sqlite3_bind_text(stmt, index, value, -1, SQLITE_TRANSIENT);
+        }
+        void BindParameter(sqlite3_stmt *stmt, int index, std::nullptr_t)
+        {
+            sqlite3_bind_null(stmt, index);
+        }
+        template <typename T>
+        void BindParameter(sqlite3_stmt *stmt, int index, const std::optional<T> &value)
+        {
+            if (value.has_value())
+                BindParameter(stmt, index, value.value());
+            else
+                sqlite3_bind_null(stmt, index);
+        }
+
+        template <typename... Args>
+        void Bind(sqlite3_stmt *stmt, int index, Args &&...args)
+        {
+            int i = index;
+            (BindParameter(stmt, i++, std::forward<Args>(args)), ...);
+        }
+
+        // Variadic Execute
+        template <typename... Args>
+        void Execute(const std::string &sql, Args &&...args)
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            sqlite3_stmt *stmt;
+            if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK)
+            {
+                std::cerr << "SQL Error (Prepare): " << sqlite3_errmsg(m_db) << "\nSQL: " << sql << std::endl;
+                return;
+            }
+
+            Bind(stmt, 1, std::forward<Args>(args)...);
+
+            if (sqlite3_step(stmt) != SQLITE_DONE)
+            {
+               // Note: STEP returning ROW is not an error but Execute is usually for non-query
+               // const char* err = sqlite3_errmsg(m_db);
+               // std::cerr << "SQL Info (Step): " << err << "\nSQL: " << sql << std::endl;
+            }
+            sqlite3_finalize(stmt);
+        }
+
+        // Variadic Query
+        template <typename T, typename Func, typename... Args>
+        std::vector<T> Query(const std::string &sql, Func mapper, Args &&...args)
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            std::vector<T> results;
+            sqlite3_stmt *stmt;
+            if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK)
+            {
+                std::cerr << "SQL Error (Prepare): " << sqlite3_errmsg(m_db) << "\nSQL: " << sql << std::endl;
+                return results;
+            }
+
+            Bind(stmt, 1, std::forward<Args>(args)...);
+
+            while (sqlite3_step(stmt) == SQLITE_ROW)
+            {
+                results.push_back(mapper(stmt));
+            }
+            sqlite3_finalize(stmt);
+            return results;
+        }
+
+        // Variadic QuerySingle
+        template <typename T, typename Func, typename... Args>
+        std::optional<T> QuerySingle(const std::string &sql, Func mapper, Args &&...args)
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+             sqlite3_stmt *stmt;
+            if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK)
+            {
+                std::cerr << "SQL Error (Prepare): " << sqlite3_errmsg(m_db) << "\nSQL: " << sql << std::endl;
+                return std::nullopt;
+            }
+
+            Bind(stmt, 1, std::forward<Args>(args)...);
+
+            std::optional<T> result = std::nullopt;
+            if (sqlite3_step(stmt) == SQLITE_ROW)
+            {
+                result = mapper(stmt);
+            }
+            sqlite3_finalize(stmt);
+            return result;
+        }
     };
 } // namespace Server::DB

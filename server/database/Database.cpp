@@ -5,6 +5,13 @@
 
 namespace Server::DB
 {
+    // Helper to extract text safely
+    static std::string ExtractText(sqlite3_stmt *stmt, int col)
+    {
+        const char *txt = reinterpret_cast<const char *>(sqlite3_column_text(stmt, col));
+        return txt ? std::string(txt) : "";
+    }
+
     Database::Database(const std::string &dbPath)
     {
         if (sqlite3_open(dbPath.c_str(), &m_db) != SQLITE_OK)
@@ -89,228 +96,135 @@ namespace Server::DB
         )";
         ExecuteSQL(schema);
 
-        // Migrations
-        char *errMsg = 0;
-        sqlite3_exec(m_db, "ALTER TABLE users ADD COLUMN wimp_mult_upper REAL DEFAULT 1.0", 0, 0, &errMsg);
-        sqlite3_free(errMsg);
-        sqlite3_exec(m_db, "ALTER TABLE users ADD COLUMN wimp_mult_lower REAL DEFAULT 1.0", 0, 0, &errMsg);
-        sqlite3_free(errMsg);
-        sqlite3_exec(m_db, "ALTER TABLE users ADD COLUMN wimp_mult_core REAL DEFAULT 1.0", 0, 0, &errMsg);
-        sqlite3_free(errMsg);
-        sqlite3_exec(m_db, "ALTER TABLE games ADD COLUMN game_duration INTEGER DEFAULT 0", 0, 0, &errMsg);
-        sqlite3_free(errMsg);
+        auto safeExec = [&](const char *sql) {
+            char *errMsg = 0;
+            sqlite3_exec(m_db, sql, 0, 0, &errMsg);
+            if (errMsg) sqlite3_free(errMsg);
+        };
+
+        safeExec("ALTER TABLE users ADD COLUMN wimp_mult_upper REAL DEFAULT 1.0");
+        safeExec("ALTER TABLE users ADD COLUMN wimp_mult_lower REAL DEFAULT 1.0");
+        safeExec("ALTER TABLE users ADD COLUMN wimp_mult_core REAL DEFAULT 1.0");
+        safeExec("ALTER TABLE games ADD COLUMN game_duration INTEGER DEFAULT 0");
     }
 
     // =========================== USERS ===========================
 
     void Database::AddUser(const User &user)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        sqlite3_stmt *stmt;
         const char *sql =
             "INSERT OR REPLACE INTO users (discord_id, riot_puuid, riot_name, riot_tag, region, "
             "last_match_id, wimp_mult_upper, wimp_mult_lower, wimp_mult_core) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        
+        std::optional<std::string> lastMatch;
+        if (!user.last_match_id.empty()) lastMatch = user.last_match_id;
 
-        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0) != SQLITE_OK)
-        {
-            std::cerr << "SQL Error in AddUser: " << sqlite3_errmsg(m_db) << std::endl;
-            return;
-        }
-
-        sqlite3_bind_int64(stmt, 1, user.discord_id);
-        sqlite3_bind_text(stmt, 2, user.riot_puuid.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 3, user.riot_name.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 4, user.riot_tag.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_text(stmt, 5, user.region.c_str(), -1, SQLITE_STATIC);
-
-        if (user.last_match_id.empty())
-            sqlite3_bind_null(stmt, 6);
-        else
-            sqlite3_bind_text(stmt, 6, user.last_match_id.c_str(), -1, SQLITE_STATIC);
-
-        sqlite3_bind_double(stmt, 7, user.mult_upper);
-        sqlite3_bind_double(stmt, 8, user.mult_lower);
-        sqlite3_bind_double(stmt, 9, user.mult_core);
-
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
+        Execute(sql, user.discord_id, user.riot_puuid, user.riot_name, user.riot_tag, user.region, 
+                lastMatch, user.mult_upper, user.mult_lower, user.mult_core);
     }
 
     std::vector<User> Database::GetDiscordUsers(int64_t discord_id)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        std::vector<User> users;
-        sqlite3_stmt *stmt;
-        const char *sql = "SELECT * FROM users WHERE discord_id = ?";
-
-        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0) != SQLITE_OK)
-            return users;
-
-        sqlite3_bind_int64(stmt, 1, discord_id);
-
-        while (sqlite3_step(stmt) == SQLITE_ROW)
-        {
+        auto mapper = [](sqlite3_stmt *stmt) {
             User u;
             u.discord_id = sqlite3_column_int64(stmt, 0);
-            u.riot_puuid = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-            u.riot_name = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
-            u.riot_tag = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3));
-            u.region = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
-            const char *match = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 5));
-            u.last_match_id = match ? match : "";
+            u.riot_puuid = ExtractText(stmt, 1);
+            u.riot_name = ExtractText(stmt, 2);
+            u.riot_tag = ExtractText(stmt, 3);
+            u.region = ExtractText(stmt, 4);
+            u.last_match_id = ExtractText(stmt, 5);
             u.mult_upper = sqlite3_column_double(stmt, 6);
             u.mult_lower = sqlite3_column_double(stmt, 7);
             u.mult_core = sqlite3_column_double(stmt, 8);
-            users.push_back(u);
-        }
-        sqlite3_finalize(stmt);
-        return users;
+            return u;
+        };
+        return Query<User>("SELECT * FROM users WHERE discord_id = ?", mapper, discord_id);
     }
 
     std::vector<User> Database::GetAllUsers()
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        std::vector<User> users;
-        sqlite3_stmt *stmt;
-        const char *sql = "SELECT * FROM users";
-
-        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0) != SQLITE_OK)
-            return users;
-
-        while (sqlite3_step(stmt) == SQLITE_ROW)
-        {
+        auto mapper = [](sqlite3_stmt *stmt) {
             User u;
             u.discord_id = sqlite3_column_int64(stmt, 0);
-            u.riot_puuid = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-            u.riot_name = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
-            u.riot_tag = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3));
-            u.region = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4));
-            const char *match = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 5));
-            u.last_match_id = match ? match : "";
+            u.riot_puuid = ExtractText(stmt, 1);
+            u.riot_name = ExtractText(stmt, 2);
+            u.riot_tag = ExtractText(stmt, 3);
+            u.region = ExtractText(stmt, 4);
+            u.last_match_id = ExtractText(stmt, 5);
             u.mult_upper = sqlite3_column_double(stmt, 6);
             u.mult_lower = sqlite3_column_double(stmt, 7);
             u.mult_core = sqlite3_column_double(stmt, 8);
-            users.push_back(u);
-        }
-        sqlite3_finalize(stmt);
-        return users;
+            return u;
+        };
+        return Query<User>("SELECT * FROM users", mapper);
     }
 
     void Database::UpdateLastMatch(int64_t discord_id, const std::string &puuid, const std::string &match_id)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        sqlite3_stmt *stmt;
-        if (sqlite3_prepare_v2(m_db, "UPDATE users SET last_match_id = ? WHERE discord_id = ? AND riot_puuid = ?", -1, &stmt,
-                               0) == SQLITE_OK)
-        {
-            sqlite3_bind_text(stmt, 1, match_id.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_int64(stmt, 2, discord_id);
-            sqlite3_bind_text(stmt, 3, puuid.c_str(), -1, SQLITE_STATIC);
-            sqlite3_step(stmt);
-            sqlite3_finalize(stmt);
-        }
+        Execute("UPDATE users SET last_match_id = ? WHERE discord_id = ? AND riot_puuid = ?", match_id, discord_id, puuid);
     }
 
     void Database::SetUserMultiplier(int64_t discord_id, double multiplier, const std::string &type)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        sqlite3_stmt *stmt;
-        std::string sql;
         if (type.empty())
-            sql = "UPDATE users SET wimp_mult_upper = ?, wimp_mult_lower = ?, wimp_mult_core = ? WHERE discord_id = ?";
-        else if (type == "upper")
-            sql = "UPDATE users SET wimp_mult_upper = ? WHERE discord_id = ?";
-        else if (type == "lower")
-            sql = "UPDATE users SET wimp_mult_lower = ? WHERE discord_id = ?";
-        else if (type == "core")
-            sql = "UPDATE users SET wimp_mult_core = ? WHERE discord_id = ?";
-
-        if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, 0) == SQLITE_OK)
         {
-            if (type.empty())
-            {
-                sqlite3_bind_double(stmt, 1, multiplier);
-                sqlite3_bind_double(stmt, 2, multiplier);
-                sqlite3_bind_double(stmt, 3, multiplier);
-                sqlite3_bind_int64(stmt, 4, discord_id);
-            }
-            else
-            {
-                sqlite3_bind_double(stmt, 1, multiplier);
-                sqlite3_bind_int64(stmt, 2, discord_id);
-            }
-            sqlite3_step(stmt);
-            sqlite3_finalize(stmt);
+            Execute("UPDATE users SET wimp_mult_upper = ?, wimp_mult_lower = ?, wimp_mult_core = ? WHERE discord_id = ?", 
+                    multiplier, multiplier, multiplier, discord_id);
+        }
+        else if (type == "upper")
+        {
+            Execute("UPDATE users SET wimp_mult_upper = ? WHERE discord_id = ?", multiplier, discord_id);
+        }
+        else if (type == "lower")
+        {
+            Execute("UPDATE users SET wimp_mult_lower = ? WHERE discord_id = ?", multiplier, discord_id);
+        }
+        else if (type == "core")
+        {
+            Execute("UPDATE users SET wimp_mult_core = ? WHERE discord_id = ?", multiplier, discord_id);
         }
     }
 
     double Database::GetUserMultiplier(int64_t discord_id, const std::string &type)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        sqlite3_stmt *stmt;
-        std::string col = "wimp_mult_upper"; // default
-        if (type == "lower")
-            col = "wimp_mult_lower";
-        else if (type == "core")
-            col = "wimp_mult_core";
+        std::string col = "wimp_mult_upper";
+        if (type == "lower") col = "wimp_mult_lower";
+        else if (type == "core") col = "wimp_mult_core";
 
         std::string sql = "SELECT " + col + " FROM users WHERE discord_id = ? LIMIT 1";
 
-        if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK)
-            return 1.0;
-        sqlite3_bind_int64(stmt, 1, discord_id);
+        auto res = QuerySingle<double>(sql, [](sqlite3_stmt* stmt){
+            return sqlite3_column_double(stmt, 0);
+        }, discord_id);
 
-        double mult = 1.0;
-        if (sqlite3_step(stmt) == SQLITE_ROW)
-            mult = sqlite3_column_double(stmt, 0);
-        sqlite3_finalize(stmt);
-        return mult;
+        return res.value_or(1.0);
     }
 
     // =========================== EXERCISES ===========================
 
     void Database::SeedExercises(const std::vector<ExerciseDefinition> &exercises)
     {
-        ExecuteSQL("DELETE FROM exercises");
-        if (exercises.empty())
-            return;
-
-        sqlite3_stmt *stmt;
-        const char *sql = "INSERT INTO exercises (exercise_name, set_count, exercise_type) VALUES (?, ?, ?)";
-        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0) != SQLITE_OK)
-            return;
+        Execute("DELETE FROM exercises");
+        if (exercises.empty()) return;
 
         for (const auto &ex : exercises)
         {
-            sqlite3_bind_text(stmt, 1, ex.name.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_int(stmt, 2, ex.set_count);
-            sqlite3_bind_text(stmt, 3, ex.type.c_str(), -1, SQLITE_STATIC);
-            sqlite3_step(stmt);
-            sqlite3_reset(stmt);
+            Execute("INSERT INTO exercises (exercise_name, set_count, exercise_type) VALUES (?, ?, ?)", 
+                    ex.name, ex.set_count, ex.type);
         }
-        sqlite3_finalize(stmt);
     }
 
     std::vector<ExerciseDefinition> Database::GetAllExercises()
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        std::vector<ExerciseDefinition> exs;
-        sqlite3_stmt *stmt;
-        const char *sql = "SELECT id, exercise_name, set_count, exercise_type FROM exercises";
-        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0) != SQLITE_OK)
-            return exs;
-
-        while (sqlite3_step(stmt) == SQLITE_ROW)
-        {
-            ExerciseDefinition def;
-            def.id = sqlite3_column_int(stmt, 0);
-            def.name = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-            def.set_count = sqlite3_column_int(stmt, 2);
-            def.type = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3));
-            exs.push_back(def);
-        }
-        sqlite3_finalize(stmt);
-        return exs;
+         return Query<ExerciseDefinition>("SELECT id, exercise_name, set_count, exercise_type FROM exercises", 
+            [](sqlite3_stmt* stmt){
+                ExerciseDefinition def;
+                def.id = sqlite3_column_int(stmt, 0);
+                def.name = ExtractText(stmt, 1);
+                def.set_count = sqlite3_column_int(stmt, 2);
+                def.type = ExtractText(stmt, 3);
+                return def;
+            });
     }
 
     std::optional<ExerciseDefinition> Database::GetRandomExercise()
@@ -329,60 +243,31 @@ namespace Server::DB
     void Database::AddToQueue(int64_t user_id, const std::string &match_id, const std::string &exercise, int reps,
                               int deaths)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        sqlite3_stmt *stmt;
         const char *sql =
             "INSERT INTO exercise_queue (user_id, match_id, exercise_name, reps, original_deaths) VALUES (?, ?, ?, ?, ?)";
-
-        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0) == SQLITE_OK)
-        {
-            sqlite3_bind_int64(stmt, 1, user_id);
-            sqlite3_bind_text(stmt, 2, match_id.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_text(stmt, 3, exercise.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_int(stmt, 4, reps);
-            sqlite3_bind_int(stmt, 5, deaths);
-            sqlite3_step(stmt);
-            sqlite3_finalize(stmt);
-        }
+        Execute(sql, user_id, match_id, exercise, reps, deaths);
     }
 
     std::vector<ExerciseQueueItem> Database::GetPendingPenance(int64_t user_id)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        std::vector<ExerciseQueueItem> items;
-        sqlite3_stmt *stmt;
         const char *sql = "SELECT id, user_id, match_id, exercise_name, reps, original_deaths, timestamp FROM "
                           "exercise_queue WHERE user_id = ?";
-
-        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0) != SQLITE_OK)
-            return items;
-
-        sqlite3_bind_int64(stmt, 1, user_id);
-
-        while (sqlite3_step(stmt) == SQLITE_ROW)
-        {
+        return Query<ExerciseQueueItem>(sql, [](sqlite3_stmt* stmt){
             ExerciseQueueItem item;
             item.id = sqlite3_column_int(stmt, 0);
             item.user_id = sqlite3_column_int64(stmt, 1);
-            item.match_id = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
-            item.exercise_name = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3));
+            item.match_id = ExtractText(stmt, 2);
+            item.exercise_name = ExtractText(stmt, 3);
             item.reps = sqlite3_column_int(stmt, 4);
             item.original_deaths = sqlite3_column_int(stmt, 5);
-            item.timestamp = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 6));
-            items.push_back(item);
-        }
-        sqlite3_finalize(stmt);
-        return items;
+            item.timestamp = ExtractText(stmt, 6);
+            return item;
+        }, user_id);
     }
 
     // New Implementation for Rich Stats
     std::vector<PenanceDisplayInfo> Database::GetPendingPenanceDetailed(int64_t user_id)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        std::vector<PenanceDisplayInfo> items;
-        sqlite3_stmt *stmt;
-
-        // Left Join ensures we still get the task even if game data is missing (though unlikely in our flow)
         const char *sql = R"(
             SELECT 
                 eq.id, eq.match_id, eq.exercise_name, eq.reps, eq.original_deaths,
@@ -393,23 +278,16 @@ namespace Server::DB
             ORDER BY eq.id DESC
         )";
 
-        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0) != SQLITE_OK)
-            return items;
-
-        sqlite3_bind_int64(stmt, 1, user_id);
-
-        while (sqlite3_step(stmt) == SQLITE_ROW)
-        {
+        return Query<PenanceDisplayInfo>(sql, [](sqlite3_stmt* stmt){
             PenanceDisplayInfo item;
             item.id = sqlite3_column_int(stmt, 0);
-            item.match_id = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
-            item.exercise_name = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
+            item.match_id = ExtractText(stmt, 1);
+            item.exercise_name = ExtractText(stmt, 2);
             item.reps = sqlite3_column_int(stmt, 3);
             item.original_deaths = sqlite3_column_int(stmt, 4);
 
-            // Handle potentially NULL game stats
-            const char *champ = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 5));
-            item.champion_name = champ ? champ : "Unknown";
+            std::string champ = ExtractText(stmt, 5);
+            item.champion_name = champ.empty() ? "Unknown" : champ;
 
             item.kills = sqlite3_column_int(stmt, 6);
             item.deaths = sqlite3_column_int(stmt, 7);
@@ -419,213 +297,112 @@ namespace Server::DB
             item.cs_min = sqlite3_column_double(stmt, 11);
             item.game_timestamp = sqlite3_column_int64(stmt, 12);
 
-            items.push_back(item);
-        }
-        sqlite3_finalize(stmt);
-        return items;
+            return item;
+        }, user_id);
     }
 
     std::optional<ExerciseQueueItem> Database::GetPenanceByGameID(int64_t user_id, const std::string &match_id)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        sqlite3_stmt *stmt;
         const char *sql = "SELECT id, user_id, match_id, exercise_name, reps, original_deaths, timestamp FROM "
                           "exercise_queue WHERE user_id = ? AND match_id = ? LIMIT 1";
 
-        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0) != SQLITE_OK)
-            return std::nullopt;
-
-        sqlite3_bind_int64(stmt, 1, user_id);
-        sqlite3_bind_text(stmt, 2, match_id.c_str(), -1, SQLITE_STATIC);
-
-        std::optional<ExerciseQueueItem> res = std::nullopt;
-        if (sqlite3_step(stmt) == SQLITE_ROW)
-        {
-            ExerciseQueueItem item;
+        return QuerySingle<ExerciseQueueItem>(sql, [](sqlite3_stmt* stmt){
+             ExerciseQueueItem item;
             item.id = sqlite3_column_int(stmt, 0);
             item.user_id = sqlite3_column_int64(stmt, 1);
-            item.match_id = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
-            item.exercise_name = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3));
+            item.match_id = ExtractText(stmt, 2);
+            item.exercise_name = ExtractText(stmt, 3);
             item.reps = sqlite3_column_int(stmt, 4);
             item.original_deaths = sqlite3_column_int(stmt, 5);
-            item.timestamp = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 6));
-            res = item;
-        }
-        sqlite3_finalize(stmt);
-        return res;
+            item.timestamp = ExtractText(stmt, 6);
+            return item;
+        }, user_id, match_id);
     }
 
     void Database::CompletePenance(int64_t user_id, const std::string &match_id)
     {
         auto item = GetPenanceByGameID(user_id, match_id);
-        if (!item)
-            return;
+        if (!item) return;
 
-        std::lock_guard<std::mutex> lock(m_mutex);
-        sqlite3_stmt *delStmt;
-        if (sqlite3_prepare_v2(m_db, "DELETE FROM exercise_queue WHERE id = ?", -1, &delStmt, 0) == SQLITE_OK)
-        {
-            sqlite3_bind_int(delStmt, 1, item->id);
-            sqlite3_step(delStmt);
-            sqlite3_finalize(delStmt);
-        }
-
-        sqlite3_stmt *insStmt;
-        if (sqlite3_prepare_v2(m_db, "INSERT INTO exercise_history (user_id, exercise_name, reps) VALUES (?, ?, ?)", -1,
-                               &insStmt, 0) == SQLITE_OK)
-        {
-            sqlite3_bind_int64(insStmt, 1, user_id);
-            sqlite3_bind_text(insStmt, 2, item->exercise_name.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_int(insStmt, 3, item->reps);
-            sqlite3_step(insStmt);
-            sqlite3_finalize(insStmt);
-        }
+        Execute("DELETE FROM exercise_queue WHERE id = ?", item->id);
+        Execute("INSERT INTO exercise_history (user_id, exercise_name, reps) VALUES (?, ?, ?)", 
+                 user_id, item->exercise_name, item->reps);
     }
 
     void Database::UpdatePenance(int row_id, const std::string &new_ex, int new_reps)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        sqlite3_stmt *stmt;
-        if (sqlite3_prepare_v2(m_db, "UPDATE exercise_queue SET exercise_name = ?, reps = ? WHERE id = ?", -1, &stmt, 0) ==
-            SQLITE_OK)
-        {
-            sqlite3_bind_text(stmt, 1, new_ex.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_int(stmt, 2, new_reps);
-            sqlite3_bind_int(stmt, 3, row_id);
-            sqlite3_step(stmt);
-            sqlite3_finalize(stmt);
-        }
+        Execute("UPDATE exercise_queue SET exercise_name = ?, reps = ? WHERE id = ?", new_ex, new_reps, row_id);
     }
 
     // =========================== STATS ===========================
 
-    // Checks if match already exists in DB
     bool Database::IsMatchProcessed(int64_t discord_id, const std::string &match_id)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        sqlite3_stmt *stmt;
-        // Use 1 to just check existence, cheaper than fetching fields
-        const char *sql = "SELECT 1 FROM games WHERE match_id = ? AND user_id = ? LIMIT 1";
-
-        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0) != SQLITE_OK)
-            return false;
-
-        sqlite3_bind_text(stmt, 1, match_id.c_str(), -1, SQLITE_STATIC);
-        sqlite3_bind_int64(stmt, 2, discord_id);
-
-        bool exists = false;
-        if (sqlite3_step(stmt) == SQLITE_ROW)
-        {
-            exists = true;
-        }
-        sqlite3_finalize(stmt);
-        return exists;
+        auto res = QuerySingle<int>("SELECT 1 FROM games WHERE match_id = ? AND user_id = ? LIMIT 1", 
+            [](sqlite3_stmt*){ return 1; }, match_id, discord_id);
+        return res.has_value();
     }
 
     void Database::LogGame(int64_t user_id, const std::string &match_id, int64_t timestamp, int64_t gameDuration, const std::string &champ, int k,
                            int d, int a, double kp, int cs, double cs_min)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        sqlite3_stmt *stmt;
         const char *sql = "INSERT OR IGNORE INTO games (match_id, user_id, timestamp, champion_name, kills, deaths, "
                           "assists, kp_percent, cs_total, cs_min, game_duration) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-
-        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0) == SQLITE_OK)
-        {
-            sqlite3_bind_text(stmt, 1, match_id.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_int64(stmt, 2, user_id);
-            sqlite3_bind_int64(stmt, 3, timestamp);
-            sqlite3_bind_text(stmt, 4, champ.c_str(), -1, SQLITE_STATIC);
-            sqlite3_bind_int(stmt, 5, k);
-            sqlite3_bind_int(stmt, 6, d);
-            sqlite3_bind_int(stmt, 7, a);
-            sqlite3_bind_double(stmt, 8, kp);
-            sqlite3_bind_int(stmt, 9, cs);
-            sqlite3_bind_double(stmt, 10, cs_min);
-            sqlite3_bind_int64(stmt, 11, gameDuration);
-            sqlite3_step(stmt);
-            sqlite3_finalize(stmt);
-        }
+        Execute(sql, match_id, user_id, timestamp, champ, k, d, a, kp, cs, cs_min, gameDuration);
     }
 
     UserStats Database::GetUserStats(int64_t user_id)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        // NO LOCK here because Execute/Query take lock.
+        // This relies on the fact that we don't need transactional consistency across all these separate selects for the UI view.
+        // (It's acceptable if data changes slightly between the death count query and the KDA query).
         UserStats stats = {0, 0, 0.0, 0, 0.0, {}, {}, 0};
-        sqlite3_stmt *stmt;
 
-        if (sqlite3_prepare_v2(m_db, "SELECT SUM(deaths), COUNT(*), MAX(deaths), SUM(game_duration) FROM games WHERE user_id = ?",
-                               -1, &stmt, 0) == SQLITE_OK)
-        {
-            sqlite3_bind_int64(stmt, 1, user_id);
-            if (sqlite3_step(stmt) == SQLITE_ROW)
-            {
-                stats.total_deaths = sqlite3_column_int(stmt, 0);
-                stats.total_games = sqlite3_column_int(stmt, 1);
-                stats.most_deaths_single = sqlite3_column_int(stmt, 2);
-                
-                double totalSeconds = sqlite3_column_double(stmt, 3);
-                if (totalSeconds > 0)
-                {
-                    double totalMinutes = totalSeconds / 60.0;
-                    stats.avg_deaths_min = (double)stats.total_deaths / totalMinutes;
-                }
-                else
-                {
-                    // Fallback for division by zero or empty data
-                     stats.avg_deaths_min = 0.0;
-                }
-            }
-            sqlite3_finalize(stmt);
+        // 1. Basic Stats
+        auto basicStats = QuerySingle<std::tuple<int, int, int, double>>("SELECT SUM(deaths), COUNT(*), MAX(deaths), SUM(game_duration) FROM games WHERE user_id = ?",
+            [](sqlite3_stmt* s){
+                return std::make_tuple(
+                    sqlite3_column_int(s, 0),
+                    sqlite3_column_int(s, 1),
+                    sqlite3_column_int(s, 2),
+                    sqlite3_column_double(s, 3)
+                );
+            }, user_id);
+
+        if (basicStats) {
+            auto [deaths, games, max_deaths, duration] = *basicStats;
+            stats.total_deaths = deaths;
+            stats.total_games = games;
+            stats.most_deaths_single = max_deaths;
+            if (duration > 0) stats.avg_deaths_min = (double)deaths / (duration / 60.0);
         }
 
-        const char *kdaSql =
-            "SELECT MIN(CAST((kills + assists) AS REAL) / NULLIF(deaths, 0)) FROM games WHERE user_id = ? AND deaths > 0";
-        if (sqlite3_prepare_v2(m_db, kdaSql, -1, &stmt, 0) == SQLITE_OK)
-        {
-            sqlite3_bind_int64(stmt, 1, user_id);
-            if (sqlite3_step(stmt) == SQLITE_ROW)
-            {
-                if (sqlite3_column_type(stmt, 0) != SQLITE_NULL)
-                    stats.lowest_kda = sqlite3_column_double(stmt, 0);
-            }
-            sqlite3_finalize(stmt);
-        }
+        // 2. KDA
+        auto kda = QuerySingle<double>("SELECT MIN(CAST((kills + assists) AS REAL) / NULLIF(deaths, 0)) FROM games WHERE user_id = ? AND deaths > 0",
+             [](sqlite3_stmt* s){
+                 if (sqlite3_column_type(s, 0) != SQLITE_NULL) return sqlite3_column_double(s, 0);
+                 return 0.0;
+             }, user_id);
+        if(kda) stats.lowest_kda = *kda;
 
-        const char *exSql = "SELECT exercise_name, SUM(reps) FROM exercise_history WHERE user_id = ? GROUP BY exercise_name";
-        if (sqlite3_prepare_v2(m_db, exSql, -1, &stmt, 0) == SQLITE_OK)
-        {
-            sqlite3_bind_int64(stmt, 1, user_id);
-            while (sqlite3_step(stmt) == SQLITE_ROW)
-            {
-                std::string name = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
-                int count = sqlite3_column_int(stmt, 1);
-                stats.exercise_counts[name] = count;
-            }
-            sqlite3_finalize(stmt);
-        }
+        // 3. Exercise Counts
+        auto exCounts = Query<std::pair<std::string, int>>("SELECT exercise_name, SUM(reps) FROM exercise_history WHERE user_id = ? GROUP BY exercise_name",
+            [](sqlite3_stmt* s){
+                return std::make_pair(ExtractText(s, 0), sqlite3_column_int(s, 1));
+            }, user_id);
+        for(auto& p : exCounts) stats.exercise_counts[p.first] = p.second;
 
-        const char *chSql = "SELECT champion_name, SUM(deaths) as d FROM games WHERE user_id = ? GROUP BY champion_name "
-                            "ORDER BY d DESC LIMIT 3";
-        if (sqlite3_prepare_v2(m_db, chSql, -1, &stmt, 0) == SQLITE_OK)
-        {
-            sqlite3_bind_int64(stmt, 1, user_id);
-            while (sqlite3_step(stmt) == SQLITE_ROW)
-            {
-                std::string name = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
-                int d = sqlite3_column_int(stmt, 1);
-                stats.top_death_champs.push_back({name, d});
-            }
-            sqlite3_finalize(stmt);
-        }
+        // 4. Top Death Champs
+        auto topChamps = Query<std::pair<std::string, int>>("SELECT champion_name, SUM(deaths) as d FROM games WHERE user_id = ? GROUP BY champion_name ORDER BY d DESC LIMIT 3",
+             [](sqlite3_stmt* s){
+                return std::make_pair(ExtractText(s, 0), sqlite3_column_int(s, 1));
+             }, user_id);
+        stats.top_death_champs = topChamps;
 
-        if (sqlite3_prepare_v2(m_db, "SELECT COUNT(*) FROM exercise_queue WHERE user_id = ?", -1, &stmt, 0) == SQLITE_OK)
-        {
-            sqlite3_bind_int64(stmt, 1, user_id);
-            if (sqlite3_step(stmt) == SQLITE_ROW)
-                stats.pending_penance_count = sqlite3_column_int(stmt, 0);
-            sqlite3_finalize(stmt);
-        }
+        // 5. Pending Count
+        auto pending = QuerySingle<int>("SELECT COUNT(*) FROM exercise_queue WHERE user_id = ?", 
+            [](sqlite3_stmt* s){ return sqlite3_column_int(s, 0); }, user_id);
+        if(pending) stats.pending_penance_count = *pending;
 
         return stats;
     }
@@ -634,48 +411,27 @@ namespace Server::DB
 
     std::vector<PenanceDisplayInfo> Database::GetRecentGames(int64_t user_id, int limit)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        std::vector<PenanceDisplayInfo> items;
-        sqlite3_stmt *stmt;
         const char *sql = "SELECT match_id, user_id, timestamp, champion_name, kills, deaths, assists, kp_percent, cs_total, "
                           "cs_min FROM games WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?";
-
-        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, 0) != SQLITE_OK)
-            return items;
-
-        sqlite3_bind_int64(stmt, 1, user_id);
-        sqlite3_bind_int(stmt, 2, limit);
-
-        while (sqlite3_step(stmt) == SQLITE_ROW)
-        {
+        
+        return Query<PenanceDisplayInfo>(sql, [](sqlite3_stmt* stmt){
             PenanceDisplayInfo item;
-            // Fill basics although this struct is slightly misused here (it was meant for Penance)
-            // We just need the stats part for the Charts
-            item.match_id = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
-            // user_id at 1
+            item.match_id = ExtractText(stmt, 0);
             item.game_timestamp = sqlite3_column_int64(stmt, 2);
-            item.champion_name = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3));
+            item.champion_name = ExtractText(stmt, 3);
             item.kills = sqlite3_column_int(stmt, 4);
             item.deaths = sqlite3_column_int(stmt, 5);
             item.assists = sqlite3_column_int(stmt, 6);
             item.kp_percent = sqlite3_column_double(stmt, 7);
             item.cs = sqlite3_column_int(stmt, 8);
             item.cs_min = sqlite3_column_double(stmt, 9);
-            
-            items.push_back(item);
-        }
-        sqlite3_finalize(stmt);
-        return items;
+            return item;
+        }, user_id, limit);
     }
 
     std::vector<std::pair<std::string, int>> Database::GetLeaderboard(const std::string &type)
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        std::vector<std::pair<std::string, int>> results;
-        sqlite3_stmt *stmt;
         std::string sql;
-
-        // Note: Joining with users table to get names
         if (type == "reps")
         {
             sql = "SELECT u.riot_name, SUM(h.reps) as val FROM exercise_history h "
@@ -690,26 +446,17 @@ namespace Server::DB
         }
         else if (type == "kda")
         {
-             // For KDA we might want a minimum game count to avoid 1-game wonders
-             // Using integer scaled by 100 for "score" since pair is <string, int>
              sql = "SELECT u.riot_name, (CAST((SUM(g.kills) + SUM(g.assists)) AS REAL) / MAX(SUM(g.deaths), 1)) * 100 as val "
                    "FROM games g "
                    "JOIN users u ON g.user_id = u.discord_id "
                    "GROUP BY g.user_id HAVING COUNT(*) > 5 ORDER BY val DESC LIMIT 10";
         }
 
-        if (sql.empty()) return results;
+        if (sql.empty()) return {};
 
-        if (sqlite3_prepare_v2(m_db, sql.c_str(), -1, &stmt, 0) != SQLITE_OK)
-            return results;
-
-        while (sqlite3_step(stmt) == SQLITE_ROW)
-        {
-            const char* name = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
-            int val = sqlite3_column_int(stmt, 1);
-            results.push_back({name ? name : "Unknown", val});
-        }
-        sqlite3_finalize(stmt);
-        return results;
+        return Query<std::pair<std::string, int>>(sql, [](sqlite3_stmt* stmt){
+            std::string name = ExtractText(stmt, 0);
+            return std::make_pair(name.empty() ? "Unknown" : name, sqlite3_column_int(stmt, 1));
+        });
     }
 } // namespace Server::DB
